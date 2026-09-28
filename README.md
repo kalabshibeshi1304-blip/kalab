@@ -1,11 +1,6 @@
-<div align="center">
-
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-
-  <h1>Built with AI Studio</h2>
-
-  <p>The fastest path from prompt to production with Gemini.</p>
-
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+መንፈሳዊ የሆ መጽሐፍ ቅዱስ 
+ለወንጌላዊያን አማኞች የሚሆን እና ለሰባኪ፣ለአስተማሪ ለቲኦሎጂ ተማሪዎች የሚያገለግል ነው።
+እንዲሁም በቂ ማብራሪያና  የብሉይ ኪዳን መጻህፍት በእብራይስጥ እና በእንግሊዝኛ  ትርጉም እና ማብራሪያ የያዘ
+የአዲስ ኪዳን ግሪክ እና እንግሊዝኛ ትርጉም ከነ ማብራሪያው የያዘ
+ጥያቄ ቢኖሮት ጥያቄዎን ልመልስ የምችል የቲኦሎጂ ረዳት ቦት ያላት እጅግ አስፈላጊና ጠቃሚ መጽሐፍ ቅዱስ ነው
+የትኛውም ጥያቄ ቢኖሮት እና አገልግሎታችንን መደገፍ ቢፈልጉ በ0981808707 ጀውለው ማነጋገር ይችላሉ
