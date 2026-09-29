@@ -32,6 +32,7 @@ import {
   saveOfflineChapter, 
   initializeSeedChaptersInOfflineStorage 
 } from './utils/offlineBibleStorage';
+import { fetchAuthenticChapter } from './utils/authenticBibleProvider';
 import { checkIsUnlocked } from './utils/securityManager';
 
 export default function App() {
@@ -169,7 +170,7 @@ export default function App() {
   const activeChapterRef = React.useRef({ bookId: currentBook.id, chapter: currentChapter });
   activeChapterRef.current = { bookId: currentBook.id, chapter: currentChapter };
 
-  // Load verses with instant canonical display and background enrichment
+  // Load verses with instant canonical display and background authentic enrichment
   const loadChapterVerses = useCallback(async (book: BibleBook, ch: number) => {
     setVersesError(null);
     activeChapterRef.current = { bookId: book.id, chapter: ch };
@@ -180,34 +181,20 @@ export default function App() {
       setVerses(immediateVerses);
     }
 
-    // 2. In background, attempt to fetch enriched verses from backend if available
+    // 2. Fetch full authentic Amharic chapter from authentic Bible provider
     try {
-      const url = `/api/bible/chapter-verses?book=${encodeURIComponent(book.nameAm)}&chapter=${ch}`;
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        // Guard against race conditions: only update state if user is still on the same book & chapter
-        if (
-          activeChapterRef.current.bookId === book.id &&
-          activeChapterRef.current.chapter === ch &&
-          data &&
-          data.verses &&
-          Array.isArray(data.verses) &&
-          data.verses.length > 0
-        ) {
-          const sortedVerses = [...data.verses].sort((a, b) => a.verse - b.verse);
-          setVerses(sortedVerses);
-          setVersesError(null);
-          // Persist in local storage for reliable offline access
-          saveOfflineChapter(book.id, ch, book.nameAm, book.nameEn, sortedVerses);
-        }
+      const authenticVerses = await fetchAuthenticChapter(book, ch);
+      if (
+        activeChapterRef.current.bookId === book.id &&
+        activeChapterRef.current.chapter === ch &&
+        authenticVerses &&
+        authenticVerses.length > 0
+      ) {
+        setVerses(authenticVerses);
+        setVersesError(null);
       }
     } catch (_e: any) {
-      // If offline or hosted on static Vercel, the immediate canonical verses are already actively displaying!
+      // Offline fallback is already active!
     } finally {
       if (activeChapterRef.current.bookId === book.id && activeChapterRef.current.chapter === ch) {
         setIsLoadingVerses(false);
