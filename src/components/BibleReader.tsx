@@ -81,9 +81,12 @@ export const BibleReader: React.FC<BibleReaderProps> = ({
     setShowOriginalView(showOriginalLanguage);
   }, [showOriginalLanguage]);
 
-  // Clear selection when book or chapter changes
+  // Clear selection and active modals when book or chapter changes
   useEffect(() => {
     setSelectedVerses([]);
+    setSelectedStrongsWord(null);
+    setSelectedVerseNumberForWord(undefined);
+    setCopiedSuccess(false);
   }, [currentBook.id, currentChapter]);
 
   const isOldTestament = currentBook.testament === 'OT';

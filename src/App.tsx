@@ -182,6 +182,8 @@ export default function App() {
       setVerses(localVerses);
       setIsLoadingVerses(false);
     } else {
+      // Clear previous chapter's verses immediately to prevent leaking stale verses
+      setVerses([]);
       setIsLoadingVerses(true);
     }
 
