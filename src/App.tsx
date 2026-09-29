@@ -33,6 +33,7 @@ import {
   initializeSeedChaptersInOfflineStorage 
 } from './utils/offlineBibleStorage';
 import { fetchAuthenticChapter } from './utils/authenticBibleProvider';
+import { getLocalChapterVerses } from './data/localBibleDatabase';
 import { checkIsUnlocked } from './utils/securityManager';
 
 export default function App() {
@@ -170,18 +171,21 @@ export default function App() {
   const activeChapterRef = React.useRef({ bookId: currentBook.id, chapter: currentChapter });
   activeChapterRef.current = { bookId: currentBook.id, chapter: currentChapter };
 
-  // Load verses with instant canonical display and background authentic enrichment
+  // Load verses with instant authentic display from Local JSON dataset and seamless background enrichment
   const loadChapterVerses = useCallback(async (book: BibleBook, ch: number) => {
     setVersesError(null);
     activeChapterRef.current = { bookId: book.id, chapter: ch };
 
-    // 1. Immediately retrieve verses from cache or canonical engine (0ms instant display)
-    const immediateVerses = getOfflineChapter(book.id, ch, true);
-    if (immediateVerses && immediateVerses.length > 0) {
-      setVerses(immediateVerses);
+    // 1. Immediately retrieve verses from Local JSON database or verified offline cache (0ms instant display)
+    const localVerses = getLocalChapterVerses(book.id, ch) || getOfflineChapter(book.id, ch, false);
+    if (localVerses && localVerses.length > 0) {
+      setVerses(localVerses);
+      setIsLoadingVerses(false);
+    } else {
+      setIsLoadingVerses(true);
     }
 
-    // 2. Fetch full authentic Amharic chapter from authentic Bible provider
+    // 2. Fetch authentic Amharic chapter from authentic Bible provider
     try {
       const authenticVerses = await fetchAuthenticChapter(book, ch);
       if (
@@ -194,7 +198,7 @@ export default function App() {
         setVersesError(null);
       }
     } catch (_e: any) {
-      // Offline fallback is already active!
+      // If network fails, keep whatever is already loaded
     } finally {
       if (activeChapterRef.current.bookId === book.id && activeChapterRef.current.chapter === ch) {
         setIsLoadingVerses(false);

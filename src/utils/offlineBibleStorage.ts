@@ -1,10 +1,20 @@
 import { BibleVerse } from '../types';
-import { SEED_CHAPTERS, getBookById } from '../data/bibleData';
+import { SEED_CHAPTERS } from '../data/bibleData';
 import { getExpectedVerseCount } from '../data/bibleVerseCounts';
-import { generateCanonicalChapterVerses, CURATED_CANONICAL_CHAPTERS } from '../data/canonicalBibleEngine';
+import { CURATED_CANONICAL_CHAPTERS } from '../data/canonicalBibleEngine';
 
-const OFFLINE_CHAPTERS_KEY = 'kal_offline_chapters_v3';
-const OFFLINE_STATS_KEY = 'kal_offline_stats_v3';
+const OFFLINE_CHAPTERS_KEY = 'kal_offline_chapters_v4';
+const OFFLINE_STATS_KEY = 'kal_offline_stats_v4';
+
+// Old keys to automatically purge
+const OBSOLETE_KEYS = [
+  'kal_offline_chapters_v1',
+  'kal_offline_chapters_v2',
+  'kal_offline_chapters_v3',
+  'kal_offline_stats_v1',
+  'kal_offline_stats_v2',
+  'kal_offline_stats_v3'
+];
 
 export interface StoredChapterData {
   bookId: string;
@@ -20,6 +30,42 @@ export interface OfflineCacheStats {
   lastCachedTimestamp: number | null;
   cachedKeys: string[];
 }
+
+/**
+ * Checks if a verse is genuine and not a synthetic placeholder
+ */
+export function isAuthenticVerse(verse: BibleVerse): boolean {
+  if (!verse || !verse.textAm) return false;
+  const text = verse.textAm.trim();
+  // Filter out any generated placeholders
+  if (text.includes('የእግዚአብሔር ቃል ለሕይወታችን መብራት ለመንገዳችንም ብርሃን ነው')) return false;
+  if (text.includes('የወንጌላዊ ቀኖና ትምህርትና')) return false;
+  return text.length > 5;
+}
+
+/**
+ * Checks if an entire chapter is authentic and contains no placeholder junk
+ */
+export function isAuthenticChapter(verses: BibleVerse[]): boolean {
+  if (!verses || verses.length === 0) return false;
+  return verses.every(isAuthenticVerse);
+}
+
+/**
+ * Automatically purge obsolete and corrupted caches
+ */
+export function purgeObsoleteCaches(): void {
+  try {
+    for (const key of OBSOLETE_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch (_e) {
+    // ignore
+  }
+}
+
+// Run cleanup immediately on load
+purgeObsoleteCaches();
 
 // Read raw stored map of chapters
 function getStoredChaptersMap(): Record<string, StoredChapterData> {
@@ -42,7 +88,7 @@ function saveStoredChaptersMap(map: Record<string, StoredChapterData>) {
 }
 
 /**
- * Saves a chapter to the local offline cache
+ * Saves a chapter to the local offline cache only if genuine
  */
 export function saveOfflineChapter(
   bookId: string,
@@ -52,6 +98,7 @@ export function saveOfflineChapter(
   verses: BibleVerse[]
 ): void {
   if (!verses || verses.length === 0) return;
+  if (!isAuthenticChapter(verses)) return; // Never save synthetic verses
 
   const key = `${bookId.toUpperCase()}_${chapter}`;
   const map = getStoredChaptersMap();
@@ -68,24 +115,24 @@ export function saveOfflineChapter(
 }
 
 /**
- * Retrieves a chapter from offline storage guaranteeing complete 1..N contiguous verses
+ * Retrieves a chapter from offline storage only if verified authentic
  */
-export function getOfflineChapter(bookId: string, chapter: number, generateIfMissing: boolean = true): BibleVerse[] | null {
+export function getOfflineChapter(bookId: string, chapter: number, _generateIfMissing: boolean = false): BibleVerse[] | null {
   const key = `${bookId.toUpperCase()}_${chapter}`;
   const expectedCount = getExpectedVerseCount(bookId, chapter);
 
-  // 1. Check user local persistent cache if it contains a complete chapter
-  const map = getStoredChaptersMap();
-  if (map[key] && map[key].verses && map[key].verses.length >= expectedCount) {
-    const sorted = [...map[key].verses].sort((a, b) => a.verse - b.verse);
-    return sorted;
+  // 1. Check curated seed chapters first
+  const curated = CURATED_CANONICAL_CHAPTERS[key] || SEED_CHAPTERS[key];
+  if (curated && curated.length >= expectedCount && isAuthenticChapter(curated)) {
+    return [...curated].sort((a, b) => a.verse - b.verse);
   }
 
-  // 2. Generate or retrieve complete canonical chapter verses (1..N gap-free)
-  if (generateIfMissing) {
-    const generated = generateCanonicalChapterVerses(bookId, chapter);
-    if (generated && generated.length > 0) {
-      return generated;
+  // 2. Check user local persistent cache if it contains authentic complete chapter
+  const map = getStoredChaptersMap();
+  if (map[key] && map[key].verses && map[key].verses.length >= expectedCount) {
+    const verses = map[key].verses;
+    if (isAuthenticChapter(verses)) {
+      return [...verses].sort((a, b) => a.verse - b.verse);
     }
   }
 
@@ -99,68 +146,76 @@ export function isChapterAvailableOffline(bookId: string, chapter: number): bool
   const key = `${bookId.toUpperCase()}_${chapter}`;
   if (CURATED_CANONICAL_CHAPTERS[key] || SEED_CHAPTERS[key]) return true;
   const map = getStoredChaptersMap();
-  return !!(map[key] && map[key].verses?.length > 0);
+  return Boolean(map[key] && map[key].verses && isAuthenticChapter(map[key].verses));
 }
 
 /**
- * Returns statistics about offline stored chapters
+ * Get stats of currently cached offline chapters
  */
 export function getOfflineCacheStats(): OfflineCacheStats {
   const map = getStoredChaptersMap();
-  const dynamicKeys = Object.keys(map);
-  const seedKeys = Object.keys(CURATED_CANONICAL_CHAPTERS);
-  const uniqueKeys = Array.from(new Set([...seedKeys, ...dynamicKeys]));
-
+  const keys = Object.keys(map).filter(k => map[k] && isAuthenticChapter(map[k].verses));
   let lastTimestamp: number | null = null;
-  dynamicKeys.forEach((k) => {
-    const time = map[k]?.cachedAt;
-    if (time && (!lastTimestamp || time > lastTimestamp)) {
-      lastTimestamp = time;
+
+  for (const k of keys) {
+    const item = map[k];
+    if (item && item.cachedAt) {
+      if (lastTimestamp === null || item.cachedAt > lastTimestamp) {
+        lastTimestamp = item.cachedAt;
+      }
     }
-  });
+  }
 
   return {
-    totalChaptersCached: uniqueKeys.length,
+    totalChaptersCached: keys.length,
     lastCachedTimestamp: lastTimestamp,
-    cachedKeys: uniqueKeys,
+    cachedKeys: keys,
   };
 }
 
 /**
- * Pre-cache all curated core theological & devotional chapters into local offline store
+ * Clear all offline stored chapters
+ */
+export function clearAllOfflineChapters(): void {
+  try {
+    localStorage.removeItem(OFFLINE_CHAPTERS_KEY);
+    localStorage.removeItem(OFFLINE_STATS_KEY);
+    purgeObsoleteCaches();
+  } catch (e) {
+    console.warn('Failed to clear offline storage:', e);
+  }
+}
+
+/**
+ * Pre-populate initial authentic chapters into offline storage
  */
 export function initializeSeedChaptersInOfflineStorage(): void {
-  // Clean up legacy keys if any
+  purgeObsoleteCaches();
   try {
-    localStorage.removeItem('kal_offline_chapters_v1');
-    localStorage.removeItem('kal_offline_chapters_v2');
-  } catch (_e) {
-    // Ignore
-  }
+    const existing = getStoredChaptersMap();
+    let hasUpdates = false;
 
-  const map = getStoredChaptersMap();
-  let modified = false;
-
-  Object.entries(CURATED_CANONICAL_CHAPTERS).forEach(([key, verses]) => {
-    const parts = key.split('_');
-    const bId = parts[0];
-    const chNum = parseInt(parts[1], 10);
-    const book = getBookById(bId);
-
-    if (!map[key] || map[key].verses.length < verses.length) {
-      map[key] = {
-        bookId: bId,
-        bookNameAm: book?.nameAm || bId,
-        bookNameEn: book?.nameEn || bId,
-        chapter: chNum,
-        verses: [...verses].sort((a, b) => a.verse - b.verse),
-        cachedAt: Date.now(),
-      };
-      modified = true;
+    for (const [key, verses] of Object.entries(CURATED_CANONICAL_CHAPTERS)) {
+      if (!existing[key] && verses && verses.length > 0 && isAuthenticChapter(verses)) {
+        const parts = key.split('_');
+        const bookId = parts[0];
+        const chapter = parseInt(parts[1], 10) || 1;
+        existing[key] = {
+          bookId,
+          bookNameAm: '',
+          bookNameEn: '',
+          chapter,
+          verses: [...verses].sort((a, b) => a.verse - b.verse),
+          cachedAt: Date.now(),
+        };
+        hasUpdates = true;
+      }
     }
-  });
 
-  if (modified) {
-    saveStoredChaptersMap(map);
+    if (hasUpdates) {
+      saveStoredChaptersMap(existing);
+    }
+  } catch (e) {
+    console.warn('Seed initialization error:', e);
   }
 }

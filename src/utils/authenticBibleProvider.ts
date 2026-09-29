@@ -1,7 +1,8 @@
 import { BibleVerse, BibleBook } from '../types';
 import { getExpectedVerseCount } from '../data/bibleVerseCounts';
 import { CURATED_CANONICAL_CHAPTERS } from '../data/canonicalBibleEngine';
-import { saveOfflineChapter, getOfflineChapter } from './offlineBibleStorage';
+import { getLocalChapterVerses } from '../data/localBibleDatabase';
+import { saveOfflineChapter, getOfflineChapter, isAuthenticChapter } from './offlineBibleStorage';
 
 // In-memory cache for full downloaded books
 const bookCache: Map<number, any> = new Map();
@@ -13,17 +14,19 @@ function extractVersesFromBookData(bookData: any, chapterNum: number, book: Bibl
   if (!bookData) return [];
 
   const isOT = book.testament === 'OT';
-  const originalLangName = isOT ? 'ዕብራይስጥ' : 'ግሪክኛ';
   const verses: BibleVerse[] = [];
 
   // Schema 1: { "chapters": [ { "chapter": 1, "verses": [ { "verse": 1, "text": "..." } ] } ] }
   if (Array.isArray(bookData.chapters)) {
     const chapterObj = bookData.chapters.find(
-      (c: any) => c.chapter === chapterNum || c.chapter_number === chapterNum || c.id === chapterNum
+      (c: any) =>
+        Number(c.chapter) === chapterNum ||
+        Number(c.chapter_number) === chapterNum ||
+        Number(c.id) === chapterNum
     );
     if (chapterObj && Array.isArray(chapterObj.verses)) {
       chapterObj.verses.forEach((v: any, idx: number) => {
-        const vNum = v.verse || v.verse_number || idx + 1;
+        const vNum = Number(v.verse || v.verse_number) || idx + 1;
         const text = v.text || v.textAm || v.content || '';
         if (text && text.trim()) {
           verses.push({
@@ -36,13 +39,13 @@ function extractVersesFromBookData(bookData: any, chapterNum: number, book: Bibl
       });
       if (verses.length > 0) return verses;
     }
-    
+
     // Schema 1b: chapters is an array of arrays of strings/objects
     if (bookData.chapters[chapterNum - 1]) {
       const chItem = bookData.chapters[chapterNum - 1];
       if (Array.isArray(chItem)) {
         chItem.forEach((vItem: any, idx: number) => {
-          const vNum = typeof vItem === 'object' ? (vItem.verse || idx + 1) : idx + 1;
+          const vNum = typeof vItem === 'object' ? (Number(vItem.verse) || idx + 1) : idx + 1;
           const text = typeof vItem === 'object' ? (vItem.text || '') : String(vItem);
           if (text && text.trim()) {
             verses.push({
@@ -63,7 +66,7 @@ function extractVersesFromBookData(bookData: any, chapterNum: number, book: Bibl
   if (chData) {
     if (Array.isArray(chData)) {
       chData.forEach((item: any, idx: number) => {
-        const vNum = typeof item === 'object' ? (item.verse || idx + 1) : idx + 1;
+        const vNum = typeof item === 'object' ? (Number(item.verse) || idx + 1) : idx + 1;
         const text = typeof item === 'object' ? (item.text || '') : String(item);
         if (text && text.trim()) {
           verses.push({
@@ -92,9 +95,9 @@ function extractVersesFromBookData(bookData: any, chapterNum: number, book: Bibl
 
   // Schema 3: Direct flat array of verses: [ { "chapter": 1, "verse": 1, "text": "..." } ]
   if (Array.isArray(bookData)) {
-    const chVerses = bookData.filter((item: any) => item.chapter === chapterNum);
+    const chVerses = bookData.filter((item: any) => Number(item.chapter) === chapterNum);
     chVerses.forEach((item: any, idx: number) => {
-      const vNum = item.verse || idx + 1;
+      const vNum = Number(item.verse) || idx + 1;
       const text = item.text || item.textAm || '';
       if (text && text.trim()) {
         verses.push({
@@ -116,39 +119,47 @@ function extractVersesFromBookData(bookData: any, chapterNum: number, book: Bibl
 export async function fetchAuthenticChapter(book: BibleBook, chapterNum: number): Promise<BibleVerse[] | null> {
   const key = `${book.id.toUpperCase()}_${chapterNum}`;
 
-  // 1. Check curated high-fidelity local dataset first (includes Strong's Concordance and Greek/Hebrew)
+  // 1. Direct Local Embedded JSON Database (0ms Instant & 100% Reliable)
+  const localVerses = getLocalChapterVerses(book.id, chapterNum);
+  if (localVerses && localVerses.length > 0 && isAuthenticChapter(localVerses)) {
+    saveOfflineChapter(book.id, chapterNum, book.nameAm, book.nameEn, localVerses);
+    return localVerses;
+  }
+
+  // 2. Check curated high-fidelity local dataset
   if (CURATED_CANONICAL_CHAPTERS[key] && CURATED_CANONICAL_CHAPTERS[key].length > 0) {
     const expected = getExpectedVerseCount(book.id, chapterNum);
-    if (CURATED_CANONICAL_CHAPTERS[key].length >= expected) {
+    if (CURATED_CANONICAL_CHAPTERS[key].length >= expected && isAuthenticChapter(CURATED_CANONICAL_CHAPTERS[key])) {
       return CURATED_CANONICAL_CHAPTERS[key];
     }
   }
 
-  // 2. Check local offline storage (if it was already downloaded)
+  // 3. Check local offline storage
   const cached = getOfflineChapter(book.id, chapterNum, false);
-  if (cached && cached.length > 0) {
+  if (cached && cached.length > 0 && isAuthenticChapter(cached)) {
     const expected = getExpectedVerseCount(book.id, chapterNum);
     if (cached.length >= expected) {
       return cached;
     }
   }
 
-  // 3. Check memory cache for whole book
+  // 4. Check memory cache for whole book
   if (bookCache.has(book.order)) {
     const bookData = bookCache.get(book.order);
     const verses = extractVersesFromBookData(bookData, chapterNum, book);
-    if (verses && verses.length > 0) {
+    if (verses && verses.length > 0 && isAuthenticChapter(verses)) {
       saveOfflineChapter(book.id, chapterNum, book.nameAm, book.nameEn, verses);
       return verses;
     }
   }
 
-  // 4. Fetch the authentic Amharic Bible JSON from reliable CDNs
+  // 5. Fetch from API or reliable CDN endpoints
   const bookOrder = book.order; // 1..66
   const endpoints = [
+    `/api/bible/chapter-verses?book=${encodeURIComponent(book.id)}&chapter=${chapterNum}`,
+    `https://cdn.jsdelivr.net/gh/magna25/amharic-bible-json@master/books/${bookOrder}.json`,
+    `https://raw.githubusercontent.com/magna25/amharic-bible-json/master/books/${bookOrder}.json`,
     `https://cdn.jsdelivr.net/gh/magna25/amharic-bible-json@main/books/${bookOrder}.json`,
-    `https://raw.githubusercontent.com/magna25/amharic-bible-json/main/books/${bookOrder}.json`,
-    `/api/bible/chapter-verses?book=${encodeURIComponent(book.id)}&chapter=${chapterNum}`
   ];
 
   for (const url of endpoints) {
@@ -164,14 +175,16 @@ export async function fetchAuthenticChapter(book: BibleBook, chapterNum: number)
           // If from API endpoint
           if (data.verses && Array.isArray(data.verses) && data.verses.length > 0) {
             const sorted = [...data.verses].sort((a, b) => a.verse - b.verse);
-            saveOfflineChapter(book.id, chapterNum, book.nameAm, book.nameEn, sorted);
-            return sorted;
+            if (isAuthenticChapter(sorted)) {
+              saveOfflineChapter(book.id, chapterNum, book.nameAm, book.nameEn, sorted);
+              return sorted;
+            }
           }
 
           // If full book JSON
           bookCache.set(book.order, data);
           const verses = extractVersesFromBookData(data, chapterNum, book);
-          if (verses && verses.length > 0) {
+          if (verses && verses.length > 0 && isAuthenticChapter(verses)) {
             const sorted = [...verses].sort((a, b) => a.verse - b.verse);
             saveOfflineChapter(book.id, chapterNum, book.nameAm, book.nameEn, sorted);
             return sorted;
@@ -183,6 +196,6 @@ export async function fetchAuthenticChapter(book: BibleBook, chapterNum: number)
     }
   }
 
-  // 5. Fallback to generated canonical verses if network fails
-  return getOfflineChapter(book.id, chapterNum, true);
+  // 6. Return whatever authentic verses exist locally
+  return getOfflineChapter(book.id, chapterNum, false);
 }
